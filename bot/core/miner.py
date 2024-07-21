@@ -81,15 +81,19 @@ class Miner:
             await asyncio.sleep(delay=7)
 
     async def validate_init(self, http_client: aiohttp.ClientSession, tg_web_data: str) -> Dict[str, Any]:
+        body = json.dumps({
+            'initData': tg_web_data,
+            'platform': 'android'
+        })
+
         try:
             async with http_client.request(
                     method="POST",
-                    url="https://tg-bot-tap.laborx.io/api/v1/auth/validate-init",
-                    data=tg_web_data,
+                    url="https://tg-bot-tap.laborx.io/api/v1/auth/validate-init/v2",
+                    data=body,
             ) as response:
                 response_json = await response.json()
-
-            return response_json
+                return response_json
         except Exception as error:
             logger.error(f"{self.session_name} | Unknown error while getting account status: {error}")
             await asyncio.sleep(delay=7)
@@ -127,7 +131,6 @@ class Miner:
                 json={}
             )
             response.raise_for_status()
-
             response_json = await response.json()
 
             return response_json
@@ -175,6 +178,32 @@ class Miner:
         if diff >= settings.DEFAULT_SLEEP:
             return True
         return False
+
+    def is_upgrade_possible(self, info: Dict[str, Any], balance: int) -> bool:
+        if not info:
+            return False
+
+        current_level = info['info']['level']
+        levels = info['levelDescriptions']
+        if not levels:
+            return False
+
+        upgr = None
+        for level in levels:
+            level_level = int(level['level'])
+            if level_level == current_level + 1:
+                upgr = level
+                break
+
+        if not upgr:
+            return False
+
+        # current_balance = info['balanceInfo']['balance']
+        upgrade_price = upgr['price']
+        if balance < upgrade_price:
+            return False
+
+        return True
 
     def get_expire_from_token(self, token: str) -> int:
         parts = token.split(".")
@@ -233,8 +262,8 @@ class Miner:
                         logger.info(f"{self.session_name} | Balance is <c>{balance}</c>")
 
                         # simulating web client behavior
-                        await self.link(http_client=http_client)
                         info = await self.info(http_client=http_client)
+                        await self.link(http_client=http_client)
 
                         if self.is_claim_possible(info=info):
                             claim_info = await self.claim(http_client=http_client)
@@ -248,6 +277,15 @@ class Miner:
                                 sleep_time = self.get_sleep_time(info=start_info)
                         else:
                             sleep_time = self.get_sleep_time(info=info)
+
+                        if self.is_upgrade_possible(account_info, balance):
+                            upgrade_info = await self.upgrade(http_client=http_client)
+                            if upgrade_info:
+                                balance = upgrade_info['balance']
+                                level = upgrade_info['level']
+                                logger.success(f"{self.session_name} | Upgraded successfully to level {level}, new balance is <c>{balance}</c>")
+
+                                await self.info(http_client=http_client)
 
                 except InvalidSession as error:
                     raise error
