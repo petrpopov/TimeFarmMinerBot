@@ -168,16 +168,20 @@ class Miner:
             logger.error(f"{self.session_name} | Unknown error while upgrading: {error}")
             await asyncio.sleep(delay=7)
 
-    def is_claim_possible(self, info: Dict[str, Any]) -> bool:
+    def is_claim_possible(self, info: Dict[str, Any]) -> Tuple[bool, bool]:
         if not info:
-            return False
+            return False, False
+
+        if 'activeFarmingStartedAt' not in info.keys():
+            return False, True
 
         last_claim_timestamp = dateutil.parser.parse(info['activeFarmingStartedAt']).timestamp()
         current_time = time.time()
         diff = current_time - last_claim_timestamp
         if diff >= settings.DEFAULT_SLEEP:
-            return True
-        return False
+            return True, True
+
+        return False, False
 
     def is_upgrade_possible(self, info: Dict[str, Any], balance: int) -> bool:
         if not info:
@@ -220,6 +224,9 @@ class Miner:
         return payload['exp']
 
     def get_sleep_time(self, info: Dict[str, Any]) -> int:
+        if not 'activeFarmingStartedAt' in info.keys():
+            return info['farmingDurationInSec']
+
         farming_start_timestamp = dateutil.parser.parse(info['activeFarmingStartedAt']).timestamp()
         next_claim_timestamp = farming_start_timestamp + int(info['farmingDurationInSec'])
 
@@ -265,16 +272,20 @@ class Miner:
                         info = await self.info(http_client=http_client)
                         await self.link(http_client=http_client)
 
-                        if self.is_claim_possible(info=info):
+                        claimable, to_start = self.is_claim_possible(info=info)
+
+                        if claimable:
                             claim_info = await self.claim(http_client=http_client)
                             if claim_info:
                                 balance = claim_info['balance']
                                 logger.success(f"{self.session_name} | Claimed successfully, new balance is <c>{balance}</c>")
                                 await self.info(http_client=http_client)
 
-                                start_info = await self.start(http_client=http_client)
-                                await self.info(http_client=http_client)
-                                sleep_time = self.get_sleep_time(info=start_info)
+                        if to_start:
+                            start_info = await self.start(http_client=http_client)
+                            await self.info(http_client=http_client)
+                            sleep_time = self.get_sleep_time(info=start_info)
+
                         else:
                             sleep_time = self.get_sleep_time(info=info)
 
